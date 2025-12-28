@@ -3,7 +3,7 @@
   # comment out robot #1 if only using 1 arm
   "robots": [
     {
-      "robot_type": "ur5e",
+      "robot_type": "dummy",
       "robot_ip": "192.168.0.8",
       "robot_obs_latency": 0.0001, "robot_action_latency": 0.1, "tcp_offset": 0.235,
       # table height for finger-table collision avoidance

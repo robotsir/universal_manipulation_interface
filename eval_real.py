@@ -26,9 +26,12 @@ import pathlib
 import time
 from multiprocessing.managers import SharedMemoryManager
 
+import threading
+
 import av
 import click
 import cv2
+from sklearn import pipeline
 import yaml
 import dill
 import hydra
@@ -56,7 +59,7 @@ from umi.real_world.real_inference_util import (get_real_obs_dict,
                                                 get_real_obs_resolution,
                                                 get_real_umi_obs_dict,
                                                 get_real_umi_action)
-from umi.real_world.spacemouse_shared_memory import Spacemouse
+# from umi.real_world.spacemouse_shared_memory import Spacemouse
 from umi.common.pose_util import pose_to_mat, mat_to_pose
 
 OmegaConf.register_new_resolver("eval", eval, replace=True)
@@ -105,6 +108,40 @@ def solve_sphere_collision(ee_poses, robots_config):
                 ee_poses[this_robot_idx][:6] = mat_to_pose(this_sphere_mat_global @ np.linalg.inv(this_sphere_mat_local))
                 ee_poses[that_robot_idx][:6] = mat_to_pose(np.linalg.inv(this_that_mat) @ that_sphere_mat_global @ np.linalg.inv(that_sphere_mat_local))
 
+
+class LatestFrameCapture:
+    def __init__(self, cap):
+        self.cap = cap
+        self.lock = threading.Lock()
+        self.frame = None
+        self.ok = False
+        self.stop_flag = False
+        self.t = threading.Thread(target=self._run, daemon=True)
+
+    def start(self):
+        self.t.start()
+        return self
+
+    def _run(self):
+        while not self.stop_flag:
+            ok, frame = self.cap.read()
+            if ok:
+                with self.lock:
+                    self.ok = True
+                    self.frame = frame  # overwrite (drops backlog)
+            else:
+                time.sleep(0.001)
+
+    def read_latest(self):
+        with self.lock:
+            if not self.ok or self.frame is None:
+                return False, None
+            return True, self.frame.copy()
+
+    def stop(self):
+        self.stop_flag = True
+        self.t.join(timeout=1)
+
 @click.command()
 @click.option('--input', '-i', required=True, help='Path to checkpoint')
 @click.option('--output', '-o', required=True, help='Directory to save recording')
@@ -123,13 +160,21 @@ def solve_sphere_collision(ee_poses, robots_config):
 @click.option('-sf', '--sim_fov', type=float, default=None)
 @click.option('-ci', '--camera_intrinsics', type=str, default=None)
 @click.option('--mirror_swap', is_flag=True, default=False)
+@click.option('--camera_only', is_flag=True, default=False,
+              help="Only validate camera/obs preprocessing + policy forward pass; no robot env import.")
+
+
+
+
+
+
 def main(input, output, robot_config, 
     match_dataset, match_episode, match_camera,
     camera_reorder,
     vis_camera_idx, init_joints, 
     steps_per_inference, max_duration,
     frequency, command_latency, 
-    no_mirror, sim_fov, camera_intrinsics, mirror_swap):
+    no_mirror, sim_fov, camera_intrinsics, mirror_swap, camera_only):
     max_gripper_width = 0.09
     gripper_speed = 0.2
     
@@ -156,6 +201,43 @@ def main(input, output, robot_config,
     dt = 1/frequency
 
     obs_res = get_real_obs_resolution(cfg.task.shape_meta)
+
+    if camera_only:
+        print("Camera-only mode. Expected obs image resolution:", obs_res)
+
+        # Quick webcam smoke test via OpenCV (replace index as needed)
+        # cap = cv2.VideoCapture(0)
+        
+        cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 3840)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 3040)
+        cap.set(cv2.CAP_PROP_FPS, 20)
+
+        # Try to reduce internal buffering too (may or may not take effect)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+        lf = LatestFrameCapture(cap).start()
+
+        while True:
+            ok, frame_bgr = lf.read_latest()
+            if not ok:
+                continue
+
+            frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+            resized = cv2.resize(frame_rgb, (224, 224), interpolation=cv2.INTER_AREA)
+            cv2.imshow("camera_only", resized[..., ::-1])
+            if (cv2.waitKey(1) & 0xFF) == ord('q'):
+                break
+
+        lf.stop()
+        cap.release()
+        cv2.destroyAllWindows()
+
+        return
+
+
+
     # load fisheye converter
     fisheye_converter = None
     if sim_fov is not None:
@@ -170,8 +252,7 @@ def main(input, output, robot_config,
 
     print("steps_per_inference:", steps_per_inference)
     with SharedMemoryManager() as shm_manager:
-        with Spacemouse(shm_manager=shm_manager) as sm, \
-            KeystrokeCounter() as key_counter, \
+        with KeystrokeCounter() as key_counter, \
             BimanualUmiEnv(
                 output_dir=output,
                 robots_config=robots_config,
@@ -181,7 +262,7 @@ def main(input, output, robot_config,
                 obs_float32=True,
                 camera_reorder=[int(x) for x in camera_reorder],
                 init_joints=init_joints,
-                enable_multi_cam_vis=True,
+                enable_multi_cam_vis=False,
                 # latency
                 camera_obs_latency=0.17,
                 # obs
@@ -268,7 +349,9 @@ def main(input, output, robot_config,
                 del result
 
             print('Ready!')
-            while True:
+            # the following while loop should only run once
+            #while True:
+            for _ in range(1):
                 # ========= human control loop ==========
                 print("Human in control!")
                 robot_states = env.get_robot_state()
@@ -297,6 +380,8 @@ def main(input, output, robot_config,
                     if match_episode is not None:
                         match_episode_id = match_episode
                     if match_episode_id in episode_first_frame_map:
+                        print(f"Overlaying match episode {match_episode_id}")
+
                         match_img = episode_first_frame_map[match_episode_id]
                         ih, iw, _ = match_img.shape
                         oh, ow, _ = vis_img.shape
@@ -308,7 +393,8 @@ def main(input, output, robot_config,
                         vis_img = (vis_img + match_img) / 2
                     obs_left_img = obs['camera0_rgb'][-1]
                     obs_right_img = obs['camera0_rgb'][-1]
-                    vis_img = np.concatenate([obs_left_img, obs_right_img, vis_img], axis=1)
+                    # display 1x3 images in OpenCV window
+                    # vis_img = np.concatenate([obs_left_img, obs_right_img, vis_img], axis=1)
                     
                     text = f'Episode: {episode_id}'
                     cv2.putText(
@@ -330,10 +416,15 @@ def main(input, output, robot_config,
                         thickness=1,
                         color=(255,255,255)
                     )
-                    cv2.imshow('default', vis_img[...,::-1])
+                    cv2.imshow('Tele-op', vis_img[...,::-1])
                     _ = cv2.pollKey()
                     press_events = key_counter.get_press_events()
                     start_policy = False
+
+                    # by pass space mouse control for now
+                    start_policy = True
+
+
                     for key_stroke in press_events:
                         if key_stroke == KeyCode(char='q'):
                             # Exit program
@@ -382,26 +473,29 @@ def main(input, output, robot_config,
                         break
 
                     precise_wait(t_sample)
+
+
+
                     # get teleop command
-                    sm_state = sm.get_motion_state_transformed()
-                    # print(sm_state)
-                    dpos = sm_state[:3] * (0.5 / frequency)
-                    drot_xyz = sm_state[3:] * (1.5 / frequency)
+                    # sm_state = sm.get_motion_state_transformed()
+                    # # print(sm_state)
+                    # dpos = sm_state[:3] * (0.5 / frequency)
+                    # drot_xyz = sm_state[3:] * (1.5 / frequency)
 
-                    drot = st.Rotation.from_euler('xyz', drot_xyz)
-                    for robot_idx in control_robot_idx_list:
-                        target_pose[robot_idx, :3] += dpos
-                        target_pose[robot_idx, 3:] = (drot * st.Rotation.from_rotvec(
-                            target_pose[robot_idx, 3:])).as_rotvec()
+                    # drot = st.Rotation.from_euler('xyz', drot_xyz)
+                    # for robot_idx in control_robot_idx_list:
+                    #     target_pose[robot_idx, :3] += dpos
+                    #     target_pose[robot_idx, 3:] = (drot * st.Rotation.from_rotvec(
+                    #         target_pose[robot_idx, 3:])).as_rotvec()
 
-                    dpos = 0
-                    if sm.is_button_pressed(0):
-                        # close gripper
-                        dpos = -gripper_speed / frequency
-                    if sm.is_button_pressed(1):
-                        dpos = gripper_speed / frequency
-                    for robot_idx in control_robot_idx_list:
-                        gripper_target_pos[robot_idx] = np.clip(gripper_target_pos[robot_idx] + dpos, 0, max_gripper_width)
+                    # dpos = 0
+                    # if sm.is_button_pressed(0):
+                    #     # close gripper
+                    #     dpos = -gripper_speed / frequency
+                    # if sm.is_button_pressed(1):
+                    #     dpos = gripper_speed / frequency
+                    # for robot_idx in control_robot_idx_list:
+                    #     gripper_target_pos[robot_idx] = np.clip(gripper_target_pos[robot_idx] + dpos, 0, max_gripper_width)
 
                     # solve collision with table
                     for robot_idx in control_robot_idx_list:
@@ -433,6 +527,7 @@ def main(input, output, robot_config,
                 
                 # ========== policy control loop ==============
                 try:
+                    print("Policy in control!")
                     # start episode
                     policy.reset()
                     start_delay = 1.0
@@ -457,6 +552,10 @@ def main(input, output, robot_config,
                     print("Started!")
                     iter_idx = 0
                     perv_target_pose = None
+
+
+                    stop_episode = False
+
                     while True:
                         # calculate timing
                         t_cycle_end = t_start + (iter_idx + steps_per_inference) * dt
@@ -479,8 +578,31 @@ def main(input, output, robot_config,
                             result = policy.predict_action(obs_dict)
                             raw_action = result['action_pred'][0].detach().to('cpu').numpy()
                             action = get_real_umi_action(raw_action, obs, action_pose_repr)
-                            print('Inference latency:', time.time() - s)
+ 
                         
+
+
+
+
+                            # ---- ADD THIS BLOCK RIGHT HERE ----
+                            # action shape: (T, n_robots*7) where each robot is [x y z rx ry rz gripper]
+                            a0 = action[0]  # first step that would execute next (before timing filters)
+
+                            for robot_idx in range(len(robots_config)):
+                                base = robot_idx * 7
+                                pose6 = a0[base:base+6]
+                                grip  = a0[base+6]
+                                print(f"[policy->env] robot{robot_idx} pose xyz={pose6[:3]} rotvec={pose6[3:6]} gripper_width={grip}")
+                            # ---- END ADD ----
+
+                            print('Inference latency:', time.time() - s)
+
+
+
+
+
+
+
                         # convert policy action to env actions
                         this_target_poses = action
                         assert this_target_poses.shape[1] == len(robots_config) * 7
@@ -502,7 +624,8 @@ def main(input, output, robot_config,
                         # the same step actions are always the target for
                         action_timestamps = (np.arange(len(action), dtype=np.float64)
                             ) * dt + obs_timestamps[-1]
-                        print(dt)
+                        print('dt:', dt)
+
                         action_exec_latency = 0.01
                         curr_time = time.time()
                         is_new = action_timestamps > (curr_time + action_exec_latency)
@@ -518,6 +641,23 @@ def main(input, output, robot_config,
                             this_target_poses = this_target_poses[is_new]
                             action_timestamps = action_timestamps[is_new]
 
+
+
+
+
+                        a_exec = this_target_poses[0]
+                        for robot_idx in range(len(robots_config)):
+                            base = robot_idx * 7
+                            pose6 = a_exec[base:base+6]
+                            grip  = a_exec[base+6]
+                            print(f"[EXEC] robot{robot_idx} xyz={pose6[:3]} rotvec={pose6[3:6]} grip={grip} @ t={action_timestamps[0]:.3f}")
+
+
+
+
+
+
+
                         # execute actions
                         env.exec_actions(
                             actions=this_target_poses,
@@ -528,9 +668,11 @@ def main(input, output, robot_config,
 
                         # visualize
                         episode_id = env.replay_buffer.n_episodes
-                        obs_left_img = obs['camera0_rgb'][-1]
-                        obs_right_img = obs['camera0_rgb'][-1]
-                        vis_img = np.concatenate([obs_left_img, obs_right_img], axis=1)
+                        #obs_left_img = obs['camera0_rgb'][-1]
+                        #obs_right_img = obs['camera0_rgb'][-1]
+                        #vis_img = np.concatenate([obs_left_img, obs_right_img], axis=1)
+                        vis_img = obs['camera0_rgb'][-1]
+
                         text = 'Episode: {}, Time: {:.1f}'.format(
                             episode_id, time.monotonic() - t_start
                         )
@@ -543,11 +685,15 @@ def main(input, output, robot_config,
                             thickness=1,
                             color=(255,255,255)
                         )
-                        cv2.imshow('default', vis_img[...,::-1])
+
+                        cv2.namedWindow('Running Policy', cv2.WINDOW_NORMAL)
+                        cv2.resizeWindow('Running Policy', 1000, 1000)
+
+                        cv2.imshow('Running Policy', vis_img[...,::-1])
 
                         _ = cv2.pollKey()
                         press_events = key_counter.get_press_events()
-                        stop_episode = False
+                        # stop_episode = False
                         for key_stroke in press_events:
                             if key_stroke == KeyCode(char='s'):
                                 # Stop episode
@@ -573,6 +719,9 @@ def main(input, output, robot_config,
                     env.end_episode()
                 
                 print("Stopped.")
+
+                # break so we don't re-enter the outer while loop
+                #break
 
 
 

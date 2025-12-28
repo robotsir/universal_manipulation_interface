@@ -11,6 +11,40 @@ from umi.shared_memory.shared_memory_ring_buffer import SharedMemoryRingBuffer
 from umi.shared_memory.shared_memory_queue import SharedMemoryQueue, Full, Empty
 from umi.real_world.video_recorder import VideoRecorder
 from umi.common.usb_util import reset_usb_device
+import threading
+
+class LatestFrameCapture:
+    def __init__(self, cap):
+        self.cap = cap
+        self.lock = threading.Lock()
+        self.frame = None
+        self.ok = False
+        self.stop_flag = False
+        self.t = threading.Thread(target=self._run, daemon=True)
+
+    def start(self):
+        self.t.start()
+        return self
+
+    def _run(self):
+        while not self.stop_flag:
+            ok, frame = self.cap.read()
+            if ok:
+                with self.lock:
+                    self.ok = True
+                    self.frame = frame  # overwrite (drops backlog)
+            else:
+                time.sleep(0.001)
+
+    def read_latest(self):
+        with self.lock:
+            if not self.ok or self.frame is None:
+                return False, None
+            return True, self.frame.copy()
+
+    def stop(self):
+        self.stop_flag = True
+        self.t.join(timeout=1)
 
 class Command(enum.Enum):
     RESTART_PUT = 0
@@ -211,11 +245,23 @@ class UvcCamera(mp.Process):
             # set resolution and fps
             w, h = self.resolution
             fps = self.capture_fps
+
+
+            print("Camera resolution:", w, h)
+
+
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
             # set fps
             cap.set(cv2.CAP_PROP_BUFFERSIZE, self.cap_buffer_size)
             cap.set(cv2.CAP_PROP_FPS, fps)
+
+
+            print("Put FPS:", self.put_fps)
+
+            #lf = LatestFrameCapture(cap).start()
+
 
             # put frequency regulation
             put_idx = None
@@ -228,7 +274,18 @@ class UvcCamera(mp.Process):
             t_start = time.time()
             while not self.stop_event.is_set():
                 ts = time.time()
+                
+                
+                
+                
+                
+                
                 ret = cap.grab()
+
+
+
+
+
                 assert ret
                 
                 # directly write into shared memory to avoid copy

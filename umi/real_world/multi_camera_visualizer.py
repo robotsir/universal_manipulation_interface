@@ -8,7 +8,7 @@ class MultiCameraVisualizer(mp.Process):
     def __init__(self,
         camera,
         row, col,
-        window_name='Multi Cam Vis',
+        window_name='Multi Cam Vis 1',
         vis_fps=60,
         fill_value=0,
         rgb_to_bgr=True

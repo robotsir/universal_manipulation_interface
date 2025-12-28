@@ -120,6 +120,68 @@ def get_image_transform(
         return img
     return transform
 
+
+# import cv2
+# import math
+# import numpy as np
+# from typing import Tuple
+
+def get_image_transform_letterbox(
+        input_res: Tuple[int, int] = (3840, 3040),
+        output_res: Tuple[int, int] = (224, 224),
+        bgr_to_rgb: bool = False,
+        pad_value: int = 0,   # black padding
+    ):
+    iw, ih = input_res
+    ow, oh = output_res
+
+    # Determine scale (fit inside output)
+    scale = min(ow / iw, oh / ih)
+
+    rw = int(round(iw * scale))
+    rh = int(round(ih * scale))
+
+    # Choose interpolation
+    interp_method = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+
+    # Compute padding
+    pad_w = ow - rw
+    pad_h = oh - rh
+
+    pad_left   = pad_w // 2
+    pad_right  = pad_w - pad_left
+    pad_top    = pad_h // 2
+    pad_bottom = pad_h - pad_top
+
+    def transform(img: np.ndarray):
+        assert img.shape[0] == ih and img.shape[1] == iw
+
+        # Resize
+        img = cv2.resize(img, (rw, rh), interpolation=interp_method)
+
+        # Pad (letterbox)
+        img = cv2.copyMakeBorder(
+            img,
+            pad_top,
+            pad_bottom,
+            pad_left,
+            pad_right,
+            borderType=cv2.BORDER_CONSTANT,
+            value=(pad_value, pad_value, pad_value),
+        )
+
+        if bgr_to_rgb:
+            img = img[:, :, ::-1]
+
+        return img
+
+    return transform
+
+
+
+
+
+
 def optimal_row_cols(
         n_cameras,
         in_wh_ratio,

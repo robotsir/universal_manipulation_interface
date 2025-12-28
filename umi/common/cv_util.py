@@ -245,12 +245,13 @@ def get_gripper_width(tag_dict, left_id, right_id, nominal_z=0.072, z_tolerance=
 
 
 # =========== image mask ====================
+# todo: make it work for both left/right cropped images and top/bottom padded images
 def canonical_to_pixel_coords(coords, img_shape=(2028, 2704)):
-    pts = np.asarray(coords) * img_shape[0] + np.array(img_shape[::-1]) * 0.5
+    pts = np.asarray(coords) * img_shape[1] + np.array(img_shape[::-1]) * 0.5
     return pts
 
 def pixel_coords_to_canonical(pts, img_shape=(2028, 2704)):
-    coords = (np.asarray(pts) - np.array(img_shape[::-1]) * 0.5) / img_shape[0]
+    coords = (np.asarray(pts) - np.array(img_shape[::-1]) * 0.5) / img_shape[1]
     return coords
 
 def draw_canonical_polygon(img: np.ndarray, coords: np.ndarray, color: tuple):
@@ -260,15 +261,25 @@ def draw_canonical_polygon(img: np.ndarray, coords: np.ndarray, color: tuple):
     return img
 
 def get_mirror_canonical_polygon():
+    # left_pts = [
+    #     [540, 1700],
+    #     [680, 1450],
+    #     [590, 1070],
+    #     [290, 1130],
+    #     [290, 1770],
+    #     [550, 1770]
+    # ]
     left_pts = [
-        [540, 1700],
-        [680, 1450],
-        [590, 1070],
-        [290, 1130],
-        [290, 1770],
-        [550, 1770]
-    ]
-    resolution = [2028, 2704]
+        [0  , 1704],
+        [428, 1628],
+        [509, 1735],
+        [610, 2231],
+        [215, 2875],
+        [0  , 2576]
+    ]    
+
+    # resolution = [2028, 2704]
+    resolution = [3040, 3840]
     left_coords = pixel_coords_to_canonical(left_pts, resolution)
     right_coords = left_coords.copy()
     right_coords[:,0] *= -1
@@ -295,15 +306,32 @@ def get_mirror_crop_slices(img_shape=(1080,1920), left=True):
 
 
 def get_gripper_canonical_polygon():
+    #column, row
+    # left_pts = [
+    #     [1352, 1730],
+    #     [1100, 1700],
+    #     [650, 1500],
+    #     [0, 1350],
+    #     [0, 2028],
+    #     [1352, 2704]
+    # ]
+    resolution = [3040, 3840]
+    H, W = resolution
+
+    center_x = W // 2          # 1920
+    bottom_y = H - 1           # 3039
+
+
     left_pts = [
-        [1352, 1730],
-        [1100, 1700],
-        [650, 1500],
-        [0, 1350],
-        [0, 2028],
-        [1352, 2704]
+        [center_x, 2708],  # was ~1861, now touches center line
+        [1481,     2687],
+        [610,      2394],
+        [0,        2373],  # snap to left edge
+        [0,        bottom_y],  # snap to left + bottom edge
+        [center_x, bottom_y],  # was ~1851, now touches center line + bottom
     ]
-    resolution = [2028, 2704]
+
+
     left_coords = pixel_coords_to_canonical(left_pts, resolution)
     right_coords = left_coords.copy()
     right_coords[:,0] *= -1

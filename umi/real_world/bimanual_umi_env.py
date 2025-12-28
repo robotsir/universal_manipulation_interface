@@ -5,9 +5,15 @@ import time
 import shutil
 import math
 from multiprocessing.managers import SharedMemoryManager
-from umi.real_world.rtde_interpolation_controller import RTDEInterpolationController
-from umi.real_world.wsg_controller import WSGController
-from umi.real_world.franka_interpolation_controller import FrankaInterpolationController
+
+#from umi.real_world.wsg_controller import WSGController
+from umi.real_world.dummy_gripper_controller import DummyGripperController
+#from umi.real_world.franka_interpolation_controller import FrankaInterpolationController
+FrankaInterpolationController = None
+RTDEInterpolationController = None
+# use dummy controller for testing
+from umi.real_world.dummy_interpolation_controller import DummyInterpolationController
+
 from umi.real_world.multi_uvc_camera import MultiUvcCamera, VideoRecorder
 from diffusion_policy.common.timestamp_accumulator import (
     TimestampActionAccumulator,
@@ -17,7 +23,7 @@ from umi.common.cv_util import draw_predefined_mask
 from umi.real_world.multi_camera_visualizer import MultiCameraVisualizer
 from diffusion_policy.common.replay_buffer import ReplayBuffer
 from diffusion_policy.common.cv2_util import (
-    get_image_transform, optimal_row_cols)
+    get_image_transform, get_image_transform_letterbox, optimal_row_cols)
 from umi.common.usb_util import reset_all_elgato_devices, get_sorted_v4l_paths
 from umi.common.pose_util import pose_to_pos_rot
 from umi.common.interpolation_util import get_interp1d, PoseInterpolator
@@ -119,12 +125,16 @@ class BimanualUmiEnv:
                     return data
                 transform.append(tf4k)
             else:
-                res = (1920, 1080)
-                fps = 60
+                # The camera resolution and fps are defined here
+                res = (3840, 3040)
+                fps = 20
                 buf = 1
-                bit_rate = 3000*1000
+                bit_rate = 6000*1000
 
                 is_mirror = None
+
+                print('==> mirror swap  ', mirror_swap)
+
                 if mirror_swap:
                     mirror_mask = np.ones((224,224,3),dtype=np.uint8)
                     mirror_mask = draw_predefined_mask(
@@ -133,8 +143,12 @@ class BimanualUmiEnv:
                 
                 def tf(data, input_res=res):
                     img = data['color']
+
+                    #print('==> fisheye_converter  ', fisheye_converter)
+                    #print('==> is_mirror  ', is_mirror)
+
                     if fisheye_converter is None:
-                        f = get_image_transform(
+                        f = get_image_transform_letterbox(
                             input_res=input_res,
                             output_res=obs_image_resolution, 
                             # obs output rgb
@@ -147,6 +161,9 @@ class BimanualUmiEnv:
                     else:
                         img = fisheye_converter.forward(img)
                         img = img[...,::-1]
+
+                    # print('==> obs_float32  ', obs_float32)
+
                     if obs_float32:
                         img = img.astype(np.float32) / 255
                     data['color'] = img
@@ -206,10 +223,12 @@ class BimanualUmiEnv:
             j_init = None
 
         assert len(robots_config) == len(grippers_config)
-        robots: List[RTDEInterpolationController] = list()
-        grippers: List[WSGController] = list()
+        robots: List[DummyInterpolationController] = list()
+        grippers: List[DummyGripperController] = list()
         for rc in robots_config:
             if rc['robot_type'].startswith('ur5'):
+                from umi.real_world.rtde_interpolation_controller import RTDEInterpolationController
+
                 assert rc['robot_type'] in ['ur5', 'ur5e']
                 this_robot = RTDEInterpolationController(
                     shm_manager=shm_manager,
@@ -231,6 +250,8 @@ class BimanualUmiEnv:
                     receive_latency=rc['robot_obs_latency']
                 )
             elif rc['robot_type'].startswith('franka'):
+                from umi.real_world.franka_interpolation_controller import FrankaInterpolationController
+
                 this_robot = FrankaInterpolationController(
                     shm_manager=shm_manager,
                     robot_ip=rc['robot_ip'],
@@ -240,12 +261,16 @@ class BimanualUmiEnv:
                     verbose=False,
                     receive_latency=rc['robot_obs_latency']
                 )
+            elif rc['robot_type'].startswith('dummy'):
+
+
+                this_robot = DummyInterpolationController()
             else:
                 raise NotImplementedError()
             robots.append(this_robot)
 
         for gc in grippers_config:
-            this_gripper = WSGController(
+            this_gripper = DummyGripperController(
                 shm_manager=shm_manager,
                 hostname=gc['gripper_ip'],
                 port=gc['gripper_port'],
@@ -356,6 +381,29 @@ class BimanualUmiEnv:
         All other cameras, find corresponding frame with the nearest timestamp
         All low-dim observations, interpolate with respect to 'current' time
         """
+
+
+
+
+
+        if not self.is_ready:
+            print("NOT READY DEBUG:")
+            print("  robots_ready:", [getattr(r, "is_ready", None) for r in self.robots])
+            print("  grippers_ready:", [getattr(g, "is_ready", None) for g in getattr(self, "grippers", [])])
+            print("  camera_ready:", getattr(self, "camera_system", None) and getattr(self.camera_system, "is_ready", None))
+            print("  has_latest_frames:", hasattr(self, "last_obs") and self.last_obs is not None)
+
+
+
+
+
+
+
+
+
+
+
+
 
         "observation dict"
         assert self.is_ready
