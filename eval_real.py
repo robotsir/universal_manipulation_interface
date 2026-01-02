@@ -556,6 +556,12 @@ def main(input, output, robot_config,
 
                     stop_episode = False
 
+
+                    #test gripper with random width
+                    _rng = np.random.default_rng(0)  # deterministic
+                    _last_grip_update_t = time.time()
+                    _test_grip_m = 0.08
+
                     while True:
                         # calculate timing
                         t_cycle_end = t_start + (iter_idx + steps_per_inference) * dt
@@ -642,7 +648,17 @@ def main(input, output, robot_config,
                             action_timestamps = action_timestamps[is_new]
 
 
+                        # # --- TEST: override gripper command ---
+                        # now = time.time()
+                        # if now - _last_grip_update_t > 3.0:   # change once per 3 seconds
+                        #     _test_grip_m = float(_rng.uniform(0.0, 0.11))
+                        #     _last_grip_update_t = now
+                        #     print(f"[TEST] overriding g_actions -> {_test_grip_m:.3f} m")
 
+                        #     #g_actions = _test_grip_m
+                        
+                        # this_target_poses[:, 6::7] = _test_grip_m  # override all gripper commands
+                        # # --- end TEST ---
 
 
                         a_exec = this_target_poses[0]
@@ -651,9 +667,6 @@ def main(input, output, robot_config,
                             pose6 = a_exec[base:base+6]
                             grip  = a_exec[base+6]
                             print(f"[EXEC] robot{robot_idx} xyz={pose6[:3]} rotvec={pose6[3:6]} grip={grip} @ t={action_timestamps[0]:.3f}")
-
-
-
 
 
 

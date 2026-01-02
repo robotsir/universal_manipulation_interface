@@ -175,6 +175,7 @@ cython_debug/
 results/eval_cup_wild_example/replay_buffer.zarr/.zgroup
 results/eval_cup_wild_example/replay_buffer.zarr/meta/.zgroup
 results/eval_cup_wild_example/replay_buffer.zarr/meta/episode_ends/.zarray
-results/eval_cup_wild_example/videos/0/0.mp4
 cup_wild_vit_l_1img.ckpt
 cvImageTest.py
+results/eval_cup_wild_example/videos/*/*.mp4
+

@@ -7,12 +7,12 @@ import math
 from multiprocessing.managers import SharedMemoryManager
 
 #from umi.real_world.wsg_controller import WSGController
-from umi.real_world.dummy_gripper_controller import DummyGripperController
+from umi.real_world.servo_gripper_controller import ServoGripperController
 #from umi.real_world.franka_interpolation_controller import FrankaInterpolationController
 FrankaInterpolationController = None
 RTDEInterpolationController = None
 # use dummy controller for testing
-from umi.real_world.dummy_interpolation_controller import DummyInterpolationController
+from umi.real_world.ar4_interpolation_controller import AR4InterpolationController
 
 from umi.real_world.multi_uvc_camera import MultiUvcCamera, VideoRecorder
 from diffusion_policy.common.timestamp_accumulator import (
@@ -223,8 +223,8 @@ class BimanualUmiEnv:
             j_init = None
 
         assert len(robots_config) == len(grippers_config)
-        robots: List[DummyInterpolationController] = list()
-        grippers: List[DummyGripperController] = list()
+        robots: List[AR4InterpolationController] = list()
+        grippers: List[ServoGripperController] = list()
         for rc in robots_config:
             if rc['robot_type'].startswith('ur5'):
                 from umi.real_world.rtde_interpolation_controller import RTDEInterpolationController
@@ -261,21 +261,26 @@ class BimanualUmiEnv:
                     verbose=False,
                     receive_latency=rc['robot_obs_latency']
                 )
-            elif rc['robot_type'].startswith('dummy'):
-
-
-                this_robot = DummyInterpolationController()
+            elif rc['robot_type'].startswith('ar4'):
+                this_robot = AR4InterpolationController(
+                    shm_manager=shm_manager,
+                    port=rc['robot_port'],
+                    frequency=60,
+                    launch_timeout=3,
+                    verbose =True
+                )
             else:
                 raise NotImplementedError()
             robots.append(this_robot)
 
         for gc in grippers_config:
-            this_gripper = DummyGripperController(
+            this_gripper = ServoGripperController(
                 shm_manager=shm_manager,
-                hostname=gc['gripper_ip'],
                 port=gc['gripper_port'],
-                receive_latency=gc['gripper_obs_latency'],
-                use_meters=True
+                init_width=gc['init_width'],
+                frequency=10,
+                # receive_latency=gc['gripper_obs_latency'],
+                verbose=False
             )
 
             grippers.append(this_gripper)
@@ -552,10 +557,18 @@ class BimanualUmiEnv:
                 g_latency = gc['gripper_action_latency'] if compensate_latency else 0.0
                 r_actions = new_actions[i, 7 * robot_idx + 0: 7 * robot_idx + 6]
                 g_actions = new_actions[i, 7 * robot_idx + 6]
+
+
+                #print("r_actions raw:", r_actions)
+
                 robot.schedule_waypoint(
                     pose=r_actions,
                     target_time=new_timestamps[i] - r_latency
                 )
+
+                # print("g_actions raw:", float(g_actions))
+                # g_actions = float(0.050)
+  
                 gripper.schedule_waypoint(
                     pos=g_actions,
                     target_time=new_timestamps[i] - g_latency

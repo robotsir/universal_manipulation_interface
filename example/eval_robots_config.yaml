@@ -3,12 +3,14 @@
   # comment out robot #1 if only using 1 arm
   "robots": [
     {
-      "robot_type": "dummy",
-      "robot_ip": "192.168.0.8",
-      "robot_obs_latency": 0.0001, "robot_action_latency": 0.1, "tcp_offset": 0.235,
+      "robot_type": "ar4",
+      "robot_port": "/dev/serial/by-id/usb-Teensyduino_USB_Serial_11564850-if00", 
+      "robot_ip": "0.0.0.0",
+      #"robot_obs_latency": 0.0001, "robot_action_latency": 0.1, "tcp_offset": 0.235,
+      "robot_obs_latency": 0.01, "robot_action_latency": 0.1, "tcp_offset": 0.235,
       # table height for finger-table collision avoidance
       # -inf to disable
-      "height_threshold": -0.024,
+      "height_threshold": 0.430,
       # sphere collision primitive size and location for inter-gripper collision avoidance
       # 0 to disable
       "sphere_radius": 0.1, "sphere_center": [0, -0.06, -0.185]
@@ -24,8 +26,14 @@
   # gripper configurations, 0->right 1->left
   "grippers": [
     {
-      "gripper_ip": "192.168.0.18",
-      "gripper_port": 1000, "gripper_obs_latency": 0.01, "gripper_action_latency": 0.1
+      "gripper_ip": "0.0.0.0",
+      "gripper_port": "/dev/serial/by-id/usb-Arduino__www.arduino.cc__0042_758303330383513060F0-if00", 
+      "baud": 115200,
+      "init_width": 0.08,
+      "min_width_m": 0.0,
+      "max_width_m": 0.11,    
+      "has_feedback": False,
+      "gripper_obs_latency": 0.01, "gripper_action_latency": 0.1
     },
     # {
     #   "gripper_ip": "192.168.0.27",
