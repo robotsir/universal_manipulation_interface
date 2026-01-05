@@ -74,6 +74,10 @@ def solve_table_collision(ee_pose, gripper_width, height_threshold):
     rot_mat = st.Rotation.from_rotvec(ee_pose[3:6]).as_matrix()
     transformed_keypoints = np.transpose(rot_mat @ np.transpose(keypoints)) + ee_pose[:3]
     delta = max(height_threshold - np.min(transformed_keypoints[:, 2]), 0)
+
+    # if delta > 0:
+        # print('solve table collision, add Z height by delta:', delta)
+
     ee_pose[2] += delta
 
 def solve_sphere_collision(ee_poses, robots_config):
@@ -264,7 +268,14 @@ def main(input, output, robot_config,
                 init_joints=init_joints,
                 enable_multi_cam_vis=False,
                 # latency
-                camera_obs_latency=0.17,
+                # If 0.30 makes the robot stop short of the cup (undershoot), it means you told it 
+                # the latency is worse than it really is. Lower it to 0.25. If it still knocks the cup 
+                # over, raise it to 0.35
+                # tuned this for my 20fps camera usinig 
+                # calibrate_uvc_camera_latency.py, 0.128s includes 0.02s monitor lag
+                # camera_obs_latency=0.128,
+                camera_obs_latency=0.15,
+                # camera_obs_latency=0.17, # This for 60fps GoPro
                 # obs
                 camera_obs_horizon=cfg.task.shape_meta.obs.camera0_rgb.horizon,
                 robot_obs_horizon=cfg.task.shape_meta.obs.robot0_eef_pos.horizon,
@@ -380,7 +391,7 @@ def main(input, output, robot_config,
                     if match_episode is not None:
                         match_episode_id = match_episode
                     if match_episode_id in episode_first_frame_map:
-                        print(f"Overlaying match episode {match_episode_id}")
+                        # print(f"Overlaying match episode {match_episode_id}")
 
                         match_img = episode_first_frame_map[match_episode_id]
                         ih, iw, _ = match_img.shape
@@ -547,7 +558,8 @@ def main(input, output, robot_config,
 
                     # wait for 1/30 sec to get the closest frame actually
                     # reduces overall latency
-                    frame_latency = 1/60
+                    # Change 1/60 to 1/20 for 20fps camera
+                    frame_latency = 1/20
                     precise_wait(eval_t_start - frame_latency, time_func=time.time)
                     print("Started!")
                     iter_idx = 0
@@ -569,7 +581,8 @@ def main(input, output, robot_config,
                         # get obs
                         obs = env.get_obs()
                         obs_timestamps = obs['timestamp']
-                        print(f'Obs latency {time.time() - obs_timestamps[-1]}')
+                        if iter_idx % 30 == 0:
+                            print(f'Obs latency {time.time() - obs_timestamps[-1]}')
 
                         # run inference
                         with torch.no_grad():
@@ -598,7 +611,7 @@ def main(input, output, robot_config,
                                 base = robot_idx * 7
                                 pose6 = a0[base:base+6]
                                 grip  = a0[base+6]
-                                print(f"[policy->env] robot{robot_idx} pose xyz={pose6[:3]} rotvec={pose6[3:6]} gripper_width={grip}")
+                                # print(f"[policy->env] robot{robot_idx} pose xyz={pose6[:3]} rotvec={pose6[3:6]} gripper_width={grip}")
                             # ---- END ADD ----
 
                             print('Inference latency:', time.time() - s)
@@ -630,7 +643,7 @@ def main(input, output, robot_config,
                         # the same step actions are always the target for
                         action_timestamps = (np.arange(len(action), dtype=np.float64)
                             ) * dt + obs_timestamps[-1]
-                        print('dt:', dt)
+                        # print('dt:', dt)
 
                         action_exec_latency = 0.01
                         curr_time = time.time()
@@ -666,7 +679,8 @@ def main(input, output, robot_config,
                             base = robot_idx * 7
                             pose6 = a_exec[base:base+6]
                             grip  = a_exec[base+6]
-                            print(f"[EXEC] robot{robot_idx} xyz={pose6[:3]} rotvec={pose6[3:6]} grip={grip} @ t={action_timestamps[0]:.3f}")
+                            if iter_idx % 30 == 0:
+                                print(f"[EXEC] robot{robot_idx} xyz={pose6[:3]} rotvec={pose6[3:6]} grip={grip} @ t={action_timestamps[0]:.3f}")
 
 
 

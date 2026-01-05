@@ -124,18 +124,27 @@ class AR4InterpolationController(mp.Process):
             shm_manager: SharedMemoryManager, 
             port="/dev/serial/by-id/usb-Teensyduino_USB_Serial_11564850-if00", 
             frequency=30, 
+            lookahead_time=0.05,   # Look 50ms into future to compensate for robot lag
+            max_pos_speed=0.25, # 5% of max speed, copied from ur5
+            max_rot_speed=0.16, # 5% of max speed, copied from ur5
             launch_timeout=3,
             verbose=False,
-            get_max_k=None):
+            get_max_k=None,
+            receive_latency=0.015
+            ):
         
         super().__init__(name="AR4PositionalController")
         self.port = port
         self.frequency = frequency
         self.launch_timeout = launch_timeout
         self.verbose = verbose
+        self.lookahead_time = lookahead_time
+        self.max_pos_speed = max_pos_speed
+        self.max_rot_speed = max_rot_speed
+        self.receive_latency = receive_latency
 
         if get_max_k is None:
-            get_max_k = int(frequency * 5)
+            get_max_k = int(frequency * 10)
 
         # 1. Input Queue (Matches UR5 structure)
         example = {
@@ -145,7 +154,7 @@ class AR4InterpolationController(mp.Process):
             'target_time': 0.0
         }
         self.input_queue = SharedMemoryQueue.create_from_examples(
-            shm_manager=shm_manager, examples=example, buffer_size=256
+            shm_manager=shm_manager, examples=example, buffer_size=1024
         )
 
         # 2. Ring Buffer (Matches UMI observation keys)
@@ -185,7 +194,14 @@ class AR4InterpolationController(mp.Process):
             # _RP_RE = re.compile(r"G([\d.-]+)H([\d.-]+)I([\d.-]+)J([\d.-]+)K([\d.-]+)L([\d.-]+)")
 
             def get_current_pose_and_joints():
+                # [NEW] Sweep the floor: Clear the buffer of old responses (like "OK")
+                # from the PREVIOUS loop iteration before asking for new data.
+                if ser.in_waiting:
+                    ser.read(ser.in_waiting)
+
                 ser.write(b"RP\n")
+                # This readline is now guaranteed* to get the RP response,
+                # not the leftover response from the last move command.
                 line = ser.readline().decode("ascii", errors="ignore")
 
                 #print(f"[AR4Controller] <<<< RP Response: {line.strip()}")
@@ -220,7 +236,7 @@ class AR4InterpolationController(mp.Process):
                     full_chain_rads = [0] + list(joints_rad) + [0]
                     kinematics.current_joints_rad = full_chain_rads
                     
-                    print(f"[AR4Controller] Current Pose: {pose_umi}, Joints (degree): {joints_deg}")
+
 
                     return pose_umi, joints_rad
                 return None, None
@@ -238,9 +254,15 @@ class AR4InterpolationController(mp.Process):
             else:
                 print(f"[AR4Controller] Initial pose fetched: {curr_pose}")
 
-            # 2. Setup interpolator with the validated pose
-            pose_interp = PoseTrajectoryInterpolator(times=[time.monotonic()], poses=[curr_pose])
 
+            # use monotonic time to make sure the control loop never go backward
+            curr_t = time.monotonic()
+            last_waypoint_time = curr_t # <--- ADD THIS
+
+            # 2. Setup interpolator with the validated pose
+            pose_interp = PoseTrajectoryInterpolator(times=[curr_t], poses=[curr_pose])
+     
+            t_start = time.monotonic()
             iter_idx = 0
             keep_running = True
 
@@ -255,7 +277,7 @@ class AR4InterpolationController(mp.Process):
                 
                 # A. Get interpolated command
                 # 1. This is the pose the interpolator calculated (where the robot SHOULD be)
-                target_pose = pose_interp(t_loop_start)
+                target_pose = pose_interp(t_loop_start + self.lookahead_time) # <--- ADD LOOKAHEAD
                 
 
                 # --- STEP D: Send MJ Command (Throttled to 1Hz) ---
@@ -286,17 +308,19 @@ class AR4InterpolationController(mp.Process):
                 # Add motion params (Speed/Accel)
                 # Note: For trajectory tracking, speed should be handled by the update rate (frequency),
                 # but we set a high speed limit here so the motor controller doesn't throttle us.
-                cmd += "J70J80J90Sp25Ac10Dc10Rm100WNLm000000\n"
+                cmd += "J70J80J90Sp15Ac10Dc20Rm100WNLm000000\n"
 
                 #cmd = f"MJX{x_mm:.3f}Y{y_mm:.3f}Z{z_mm:.3f}Rz{rz:.3f}Ry{ry:.3f}Rx{rx:.3f}Sp10\n"
 
-                print(f"[AR4Controller] >>>>>> Sending Command: {cmd.strip()}")
+                if self.verbose and iter_idx % 30 == 0:
+                    print(f"[AR4Controller] >>>>>> Sending Command: {cmd.strip()}")
                 # don't move robot for now
                 ser.write(cmd.encode("ascii"))
 
-                line = ser.readline().decode("ascii", errors="ignore")
+                # don't wait for response, it slows down the loop
+                # line = ser.readline().decode("ascii", errors="ignore")
 
-                print(f"[AR4Controller] <<<< MJ Response: {line.strip()}")
+                # print(f"[AR4Controller] <<<< MJ Response: {line.strip()}")
 
                 # # Read minimal response to keep buffer clean (Optional: Non-blocking read recommended)
                 # if ser.in_waiting:
@@ -309,6 +333,11 @@ class AR4InterpolationController(mp.Process):
                 # C. Feedback to Ring Buffer
                 # 2. This is the pose you got from the RP command (where the robot ACTUALLY is)
                 actual_pose, actual_q = get_current_pose_and_joints()
+
+
+                if self.verbose and iter_idx % 30 == 0:
+                    print(f"[AR4Controller] Current UMI Pose: {actual_pose}, Joints (degree): {np.rad2deg(actual_q)}")
+
                 t_wall_clock = time.time()
 
                 actual_qd = np.zeros(6, dtype=np.float64)
@@ -328,43 +357,69 @@ class AR4InterpolationController(mp.Process):
                         'ActualQ': actual_q,
                         'ActualQd': actual_qd,
                         'robot_receive_timestamp': t_wall_clock, # Use wall clock here
-                        'robot_timestamp': t_wall_clock
+                        'robot_timestamp': t_wall_clock - self.receive_latency # <--- SUBTRACT LATENCY
                     })
 
                 # D. Handle Input Queue
                 # Note: Ensure you use monotonic for the interpolator logic here too!
                 try:
+                    # process at most 1 command per cycle to maintain frequency
                     commands = self.input_queue.get_k(1)
-                    for i in range(len(commands['cmd'])):
+                    n_cmd = len(commands['cmd'])
+                except Empty:
+                    n_cmd = 0
+                    commands = None # Safety
+
+                # Only try to loop if we actually have commands
+                if n_cmd > 0:
+                    # execute commands
+                    for i in range(n_cmd):
                         cmd_type = commands['cmd'][i]
                         if cmd_type == Command.STOP.value:
                             keep_running = False
+                            # stop immediately, ignore later commands
+                            break
                         elif cmd_type == Command.SCHEDULE_WAYPOINT.value:
-                            # Logic to update pose_interp
+                            target_time_mono = time.monotonic() - time.time() + commands['target_time'][i]
+                            
                             pose_interp = pose_interp.schedule_waypoint(
                                 pose=commands['target_pose'][i],
-                                time=time.monotonic() - time.time() + commands['target_time'][i],
-                                max_pos_speed=0.2, max_rot_speed=0.2, curr_time=t_loop_start + dt
+                                time=target_time_mono,
+                                max_pos_speed=self.max_pos_speed, 
+                                max_rot_speed=self.max_rot_speed, 
+                                curr_time=t_loop_start + dt,
+                                last_waypoint_time=last_waypoint_time # <--- PASS THIS
                             )
-                except Empty:
-                    pass
+                            last_waypoint_time = target_time_mono # <--- UPDATE THIS 
+                            
+                        else:
+                            keep_running = False
+                            break
+
 
                 # E. Precise timing - use the MONOTONIC start time
-                if iter_idx == 0: self.ready_event.set()
-                iter_idx += 1
 
-                t_loop_end = time.monotonic()
+
+                # t_loop_end = time.monotonic()
             
                 # NOTE: duration is aournd 0.01s for AR4
                 # if self.verbose:
                     # print(f"[AR4Controller] Loop {iter_idx}: Start {t_loop_start:.4f}, End {t_loop_end:.4f}, Duration {t_loop_end - t_loop_start:.4f}s")
                 
-                # Use monotonic start (t_loop_start) for the wait calculation
-                t_wait_until = t_loop_start + dt
-                if t_wait_until > t_loop_end:
-                    precise_wait(t_wait_until, time_func=time.monotonic)
+                # regulate frequency
+                # t_wait_until = t_loop_start + dt
+                # if t_wait_until > t_loop_end:
+                #     precise_wait(t_wait_until, time_func=time.monotonic)
 
+                t_wait_util = t_start + (iter_idx + 1) * dt
+                precise_wait(t_wait_util, time_func=time.monotonic)
 
+                if iter_idx == 0: 
+                    self.ready_event.set()
+                iter_idx += 1
+
+                if self.verbose and iter_idx % 30 == 0:
+                    print(f"[AR4Controller] Actual frequency {1/(time.monotonic() - t_loop_start):.2f} Hz")
 
 
 
@@ -384,7 +439,7 @@ class AR4InterpolationController(mp.Process):
         # 1. The process is still alive
         # 2. The 'ready_event' has been set by the run() loop
         # 3. The ring buffer has at least one data point
-        print(f"[AR4Controller] is_alive: {self.is_alive()}, ready_event: {self.ready_event.is_set()}, ring_buffer count: {self.ring_buffer.count}")
+        # print(f"[AR4Controller] is_alive: {self.is_alive()}, ready_event: {self.ready_event.is_set()}, ring_buffer count: {self.ring_buffer.count}")
         return self.is_alive() and self.ready_event.is_set() and (self.ring_buffer.count > 0)
 
     def start(self, wait=True):

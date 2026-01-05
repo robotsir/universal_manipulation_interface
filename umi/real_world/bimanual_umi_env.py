@@ -267,7 +267,11 @@ class BimanualUmiEnv:
                     port=rc['robot_port'],
                     frequency=60,
                     launch_timeout=3,
-                    verbose =True
+                    receive_latency=0.01,
+                    lookahead_time=0.1,
+                    max_pos_speed=0.2,
+                    max_rot_speed=0.1,
+                    verbose=True
                 )
             else:
                 raise NotImplementedError()
@@ -278,8 +282,9 @@ class BimanualUmiEnv:
                 shm_manager=shm_manager,
                 port=gc['gripper_port'],
                 init_width=gc['init_width'],
-                frequency=10,
-                # receive_latency=gc['gripper_obs_latency'],
+                frequency=60,
+                receive_latency=0.01,
+                lookahead_time=1.01,
                 verbose=False
             )
 
