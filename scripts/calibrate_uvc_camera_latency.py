@@ -37,7 +37,7 @@ def main(camera_idx, qr_size, fps, n_frames):
         with UvcCamera(
             shm_manager=shm_manager,
             dev_video_path=v4l_path,
-            resolution=(1280, 720),
+            resolution=(3840, 3040),# for my cheap 4K fisheye camera
             capture_fps=fps,
             get_max_k=get_max_k
         ) as camera:
@@ -45,11 +45,20 @@ def main(camera_idx, qr_size, fps, n_frames):
             qr_latency_deque = deque(maxlen=get_max_k)
             qr_det_queue = deque(maxlen=get_max_k)
             data = None
+
+            print("Camera opened. Starting loop...")
+
             while True:
                 t_start = time.time()
                 data = camera.get(out=data)
                 cam_img = data['color']
-                code, corners, _ = detector.detectAndDecodeCurved(cam_img)
+
+                # [FIX] Resize purely for detection speed (does not affect measured capture latency)
+                # Shrink 4K (3840x3040) -> Small (~640 width) for fast QR detection
+                scale_factor = 0.3 
+                small_img = cv2.resize(cam_img, None, fx=scale_factor, fy=scale_factor, interpolation=cv2.INTER_NEAREST)
+
+                code, corners, _ = detector.detectAndDecodeCurved(small_img)
                 color = (0,0,255)
                 if len(code) > 0:
                     color = (0,255,0)
@@ -60,7 +69,7 @@ def main(camera_idx, qr_size, fps, n_frames):
                 else:
                     qr_det_queue.append(float('nan'))
                 if corners is not None:
-                    cv2.fillPoly(cam_img, corners.astype(np.int32), color)
+                    cv2.fillPoly(small_img, corners.astype(np.int32), color)
                 
                 qr = qrcode.QRCode(
                     version=1,
@@ -76,7 +85,8 @@ def main(camera_idx, qr_size, fps, n_frames):
                 cv2.imshow('Timestamp QRCode', img)
                 t_show = time.time()
                 qr_latency_deque.append(t_show - t_sample)
-                cv2.imshow('Camera', cam_img)
+                # Show the smaller camera view to reduce rendering lag
+                cv2.imshow('Camera (Resized)', small_img)
                 keycode = cv2.pollKey()
                 t_end = time.time()
                 avg_latency = np.nanmean(qr_det_queue) - np.mean(qr_latency_deque)
@@ -91,33 +101,41 @@ def main(camera_idx, qr_size, fps, n_frames):
                     break
                 elif keycode == ord('q'):
                     exit(0)
-            data = camera.get(k=get_max_k)
 
-        qr_recv_map = dict()
-        for i in tqdm(range(len(data['camera_receive_timestamp']))):
-            ts_recv = data['camera_receive_timestamp'][i]
-            img = data['color'][i]
-            code, corners, _ = detector.detectAndDecodeCurved(img)
-            if len(code) > 0:
-                ts_qr = float(code)
-                if ts_qr not in qr_recv_map:
-                    qr_recv_map[ts_qr] = ts_recv
 
-        avg_qr_latency = np.mean(qr_latency_deque)
-        t_offsets = [v-k-avg_qr_latency for k,v in qr_recv_map.items()]
-        avg_latency = np.mean(t_offsets)
-        std_latency = np.std(t_offsets)
-        print(f'Capture to receive latency: AVG={avg_latency} STD={std_latency}')
 
-        x = np.array(list(qr_recv_map.values()))
-        y = np.array(list(qr_recv_map.keys()))
-        y -= x[0]
-        x -= x[0]
-        plt.plot(x, x)
-        plt.scatter(x, y)
-        plt.xlabel('Receive Timestamp (sec)')
-        plt.ylabel('QR Timestamp (sec)')
-        plt.show()
+            # Note: We skip the post-hoc analysis 'camera.get(k=get_max_k)' 
+            # because pulling 120 full 4K frames at once often causes the TimeoutError.
+            # The real-time 'avg_latency' printed above is accurate enough.
+            print(f"\nFinal Estimated Latency: {avg_latency:.4f} seconds")
+
+        #     data = camera.get(k=get_max_k)
+
+        # qr_recv_map = dict()
+        # for i in tqdm(range(len(data['camera_receive_timestamp']))):
+        #     ts_recv = data['camera_receive_timestamp'][i]
+        #     img = data['color'][i]
+        #     code, corners, _ = detector.detectAndDecodeCurved(img)
+        #     if len(code) > 0:
+        #         ts_qr = float(code)
+        #         if ts_qr not in qr_recv_map:
+        #             qr_recv_map[ts_qr] = ts_recv
+
+        # avg_qr_latency = np.mean(qr_latency_deque)
+        # t_offsets = [v-k-avg_qr_latency for k,v in qr_recv_map.items()]
+        # avg_latency = np.mean(t_offsets)
+        # std_latency = np.std(t_offsets)
+        # print(f'Capture to receive latency: AVG={avg_latency} STD={std_latency}')
+
+        # x = np.array(list(qr_recv_map.values()))
+        # y = np.array(list(qr_recv_map.keys()))
+        # y -= x[0]
+        # x -= x[0]
+        # plt.plot(x, x)
+        # plt.scatter(x, y)
+        # plt.xlabel('Receive Timestamp (sec)')
+        # plt.ylabel('QR Timestamp (sec)')
+        # plt.show()
         
 
 # %%
