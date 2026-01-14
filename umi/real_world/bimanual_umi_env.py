@@ -266,7 +266,7 @@ class BimanualUmiEnv:
                     shm_manager=shm_manager,
                     port=rc['robot_port'],
                     frequency=30,
-                    launch_timeout=3,
+                    launch_timeout=300,
                     receive_latency=0.01,
                     lookahead_time=0.1,
                     max_pos_speed=0.2,

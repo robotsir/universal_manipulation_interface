@@ -185,6 +185,27 @@ class AR4InterpolationController(mp.Process):
 
         print(f"[AR4Controller] ER Response: {line.strip()}")
 
+
+        # Move to initial position (optional)
+        # ser.write(b"MJX0Y0Z0Rz0Ry0Rx0Sp10\n")
+        # line = ser.readline().decode("ascii", errors="ignore")
+        cmd = "RJA0.000B-20.016C30.024D0.000E90.000F0.000J70J80J90Sp25Ac15Dc20Rm100WNLm000000\n"
+
+        ser.reset_input_buffer()
+        ser.write(cmd.encode())    
+        deadline = time.time() + 30.0
+        required_joints = ["B", "C", "D", "E", "F"]
+        
+        while time.time() < deadline:
+          response = ser.readline().decode("utf-8").strip()
+          if not response:
+            continue
+          if response.startswith('E'):
+            break
+          if response.startswith("A") and all(char in response for char in required_joints):
+            break
+
+
         # 2. Initialize Kinematics Solver INSIDE the process
         # (ikpy is not picklable, so it must be created here, not in __init__)
         kinematics = AR4Kinematics()
@@ -205,6 +226,11 @@ class AR4InterpolationController(mp.Process):
                 line = ser.readline().decode("ascii", errors="ignore")
 
                 #print(f"[AR4Controller] <<<< RP Response: {line.strip()}")
+
+                # CHECK FOR ESTOP MESSAGE FROM FIRMWARE
+                if "ESTOP ACTIVE" in line or "ESTOP LATCHED" in line:
+                    print("[AR4Controller] WARNING: Robot is in Soft E-Stop! Release button and restart.")
+                    return None, None
 
                 match = _RP_RE.search(line)
                 if match:
@@ -335,7 +361,7 @@ class AR4InterpolationController(mp.Process):
                 actual_pose, actual_q = get_current_pose_and_joints()
 
 
-                if self.verbose and iter_idx % 30 == 0:
+                if self.verbose and iter_idx % 30 == 0 and actual_q is not None:
                     print(f"[AR4Controller] Current UMI Pose: {actual_pose}, Joints (degree): {np.rad2deg(actual_q)}")
 
                 t_wall_clock = time.time()
