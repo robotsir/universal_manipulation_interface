@@ -172,10 +172,6 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-results/eval_cup_wild_example/replay_buffer.zarr/.zgroup
-results/eval_cup_wild_example/replay_buffer.zarr/meta/.zgroup
-results/eval_cup_wild_example/replay_buffer.zarr/meta/episode_ends/.zarray
+results/*
+temp/*
 cup_wild_vit_l_1img.ckpt
-cvImageTest.py
-results/eval_cup_wild_example/videos/*/*.mp4
-
