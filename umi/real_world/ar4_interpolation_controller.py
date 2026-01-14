@@ -297,6 +297,8 @@ class AR4InterpolationController(mp.Process):
 
             #time.sleep(1.0) # Wait a moment before sending RP command again
             last_mj_send_time = 0
+            last_cmd_angles = np.zeros(6) # Initialize storage for last sent angles
+            MIN_MOVE_THRESHOLD = 0.05     # Degrees (Deadband) - Ignore moves smaller than this
 
             while keep_running:
                 t_loop_start = time.monotonic()
@@ -309,7 +311,7 @@ class AR4InterpolationController(mp.Process):
                 # --- STEP D: Send MJ Command (Throttled to 1Hz) ---
                 # Only send if 1.0 second has passed since the last command
 
-                # if t_loop_start - last_mj_send_time > 0.1:
+
 
                 # --- B. Calculate IK (Python Side) ---
                 # Calculate angles for the 6 motors
@@ -317,43 +319,64 @@ class AR4InterpolationController(mp.Process):
                     motor_angles_deg = kinematics.compute_joint_angles(target_pose)
                 except Exception as e:
                     print(f"[AR4Controller] IK Error: {e}")
-                    motor_angles_deg = [0,0,0,0,0,0] # Safety fallback
+                    # Do NOT send [0,0,0,0,0,0]. Just stay where we are.
+                    motor_angles_deg = last_cmd_angles
+
+                # 3. SAFETY CHECKS (Deadband + Rate Limit)
+                # Check A: Is the move too small? (Fixes "Slow Crawl")
+                change_magnitude = np.max(np.abs(motor_angles_deg - last_cmd_angles))
+                is_tiny_move = change_magnitude < MIN_MOVE_THRESHOLD
+                
+                # Check B: Are we sending too fast? (Fixes "Buffer Saturation" during catch-up spikes)
+                # We use 0.99 * dt to allow slight timing jitter but block 200Hz bursts
+                is_too_fast = (t_loop_start - last_mj_send_time) < (dt * 0.99)
 
 
-                # --- C. Send Joint Command (RJA) ---
-                # We construct the RJ string directly with the calculated angles
-                # A=J1, B=J2 ... F=J6
-                cmd = "RJ"
-                cmd += f"A{motor_angles_deg[0]:.2f}"
-                cmd += f"B{motor_angles_deg[1]:.2f}"
-                cmd += f"C{motor_angles_deg[2]:.2f}"
-                cmd += f"D{motor_angles_deg[3]:.2f}"
-                cmd += f"E{motor_angles_deg[4]:.2f}"
-                cmd += f"F{motor_angles_deg[5]:.2f}"
+                # 2. If the move is microscopic (noise/catch-up), DO NOT SEND IT.
+                #    0.05 degrees is a safe threshold for AR4 accuracy.
+                if is_tiny_move or is_too_fast:
+                    # SKIP this command. 
+                    # This effectively drops the "catch-up" frames that flood the buffer.
+                    pass
+                else:
+                    # Update our memory
+                    last_cmd_angles = motor_angles_deg
+                    # Send command as normal
 
-                # Add motion params (Speed/Accel)
-                # Note: For trajectory tracking, speed should be handled by the update rate (frequency),
-                # but we set a high speed limit here so the motor controller doesn't throttle us.
-                cmd += "J70J80J90Sp15Ac10Dc20Rm100WNLm000000\n"
+                    # --- C. Send Joint Command (RJA) ---
+                    # We construct the RJ string directly with the calculated angles
+                    # A=J1, B=J2 ... F=J6
+                    cmd = "RJ"
+                    cmd += f"A{motor_angles_deg[0]:.2f}"
+                    cmd += f"B{motor_angles_deg[1]:.2f}"
+                    cmd += f"C{motor_angles_deg[2]:.2f}"
+                    cmd += f"D{motor_angles_deg[3]:.2f}"
+                    cmd += f"E{motor_angles_deg[4]:.2f}"
+                    cmd += f"F{motor_angles_deg[5]:.2f}"
 
-                #cmd = f"MJX{x_mm:.3f}Y{y_mm:.3f}Z{z_mm:.3f}Rz{rz:.3f}Ry{ry:.3f}Rx{rx:.3f}Sp10\n"
+                    # Add motion params (Speed/Accel)
+                    # Note: For trajectory tracking, speed should be handled by the update rate (frequency),
+                    # but we set a high speed limit here so the motor controller doesn't throttle us.
+                    cmd += "J70J80J90Sp25Ac15Dc20Rm100WNLm000000\n"
 
-                if self.verbose and iter_idx % 30 == 0:
-                    print(f"[AR4Controller] >>>>>> Sending Command: {cmd.strip()}")
-                # don't move robot for now
-                ser.write(cmd.encode("ascii"))
+                    #cmd = f"MJX{x_mm:.3f}Y{y_mm:.3f}Z{z_mm:.3f}Rz{rz:.3f}Ry{ry:.3f}Rx{rx:.3f}Sp10\n"
 
-                # don't wait for response, it slows down the loop
-                # line = ser.readline().decode("ascii", errors="ignore")
+                    if self.verbose and iter_idx % 30 == 0:
+                        print(f"[AR4Controller] >>>>>> Sending Command: {cmd.strip()}")
+                    # don't move robot for now
+                    ser.write(cmd.encode("ascii"))
 
-                # print(f"[AR4Controller] <<<< MJ Response: {line.strip()}")
+                    # don't wait for response, it slows down the loop
+                    # line = ser.readline().decode("ascii", errors="ignore")
 
-                # # Read minimal response to keep buffer clean (Optional: Non-blocking read recommended)
-                # if ser.in_waiting:
-                #     ser.read(ser.in_waiting)
+                    # print(f"[AR4Controller] <<<< MJ Response: {line.strip()}")
+
+                    # # Read minimal response to keep buffer clean (Optional: Non-blocking read recommended)
+                    # if ser.in_waiting:
+                    #     ser.read(ser.in_waiting)
 
 
-                last_mj_send_time = t_loop_start
+                    last_mj_send_time = t_loop_start
 
 
                 # C. Feedback to Ring Buffer
