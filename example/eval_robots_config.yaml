@@ -7,10 +7,12 @@
       "robot_port": "/dev/serial/by-id/usb-Teensyduino_USB_Serial_11564850-if00", 
       "robot_ip": "0.0.0.0",
       #"robot_obs_latency": 0.0001, "robot_action_latency": 0.1, "tcp_offset": 0.235,
-      "robot_obs_latency": 0.01, "robot_action_latency": 0.1, "tcp_offset": 0.276,
+      # +41mm in Z to account for angled gripper mount
+      # NOTE: top_offset is only used for ur5, ignored for ar4
+      "robot_obs_latency": 0.01, "robot_action_latency": 0.1, "tcp_offset": 0.235,
       # table height for finger-table collision avoidance
       # -inf to disable, with filament boxes, it was 0.430m, without it is 0.355m
-      "height_threshold": 0.220,
+      "height_threshold": 0.230,
       # sphere collision primitive size and location for inter-gripper collision avoidance
       # 0 to disable
       "sphere_radius": 0.1, "sphere_center": [0, -0.06, -0.185]

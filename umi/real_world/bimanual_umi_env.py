@@ -265,7 +265,7 @@ class BimanualUmiEnv:
                 this_robot = AR4InterpolationController(
                     shm_manager=shm_manager,
                     port=rc['robot_port'],
-                    frequency=60,
+                    frequency=30,
                     launch_timeout=3,
                     receive_latency=0.01,
                     lookahead_time=0.1,
@@ -282,7 +282,7 @@ class BimanualUmiEnv:
                 shm_manager=shm_manager,
                 port=gc['gripper_port'],
                 init_width=gc['init_width'],
-                frequency=60,
+                frequency=30,
                 receive_latency=0.01,
                 lookahead_time=1.01,
                 verbose=False
