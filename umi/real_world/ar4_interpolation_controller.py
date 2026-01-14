@@ -18,7 +18,7 @@ _RP_RE = re.compile(r"([A-Z])(-?\d+(?:\.\d+)?)")
 
 # --- 1. The IK Solver Class (Added) ---
 class AR4Kinematics:
-    def __init__(self, urdf_path="/home/di/projects/ar4_ros_driver/annin_ar4_description/urdf/ar4_no_gripper.urdf"):
+    def __init__(self, urdf_path="../../AR4/description/urdf/ar4_no_gripper.urdf"):
         # Set numpy options for clean math
         np.set_printoptions(suppress=True, precision=6)
         
