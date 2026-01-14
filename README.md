@@ -1,3 +1,39 @@
+# 🧠 UMI on a Budget: Low-Cost Adaptation for AR4
+
+[![Watch the Demo](https://img.youtube.com/vi/qmbZjXXNZu8/hqdefault.jpg)](https://youtu.be/qmbZjXXNZu8)
+
+## ⚡ Project Overview
+This repository is a specialized fork of the [Universal Manipulation Interface (UMI)](https://github.com/real-stanford/universal_manipulation_interface). 
+
+**The Goal:** Democratize embodied AI research by porting the UMI framework—originally designed for expensive industrial hardware ($30k+ setup)—to widely accessible consumer electronics (~$2k setup).
+
+## 🛠️ Key Engineering Adaptations
+
+### 1. Hardware Abstraction Layer (HAL) Rewrite
+* **Original:** Supported Universal Robots (UR5), Franka Emika, and WSG industrial grippers.
+* **My Implementation:** Wrote custom drivers to interface with the **AR4 6-DOF Robotic Arm**.
+* **Communication:** Implemented a robust **Serial Communication** bridge to stream end-effector poses from the inference loop directly to the AR4 microcontroller/Python driver.
+
+### 2. Vision System Retrofit
+* **Original:** Relied on GoPro, lens mod and capture card to feed video in real time.
+* **My Implementation:** Adapted the perception pipeline to utilize standard **$50 USB Webcams**.
+
+### 3. Custom End-Effector (CAD & Control)
+* **Original:** Industrial parallel-jaw grippers with position feedback.
+* **Mechanical Design:** Designed and 3D-printed a custom gripper actuated by a standard hobby servo.
+* **Hardware Interface:** Utilized an **Arduino Mega 2560** (Auxiliary Controller) to handle the servo signal.
+* **Control Logic:** Implemented a mapping function to convert the policy's target `gripper_width` into a **PWM signal** for the servo. 
+
+## ⚠️ Compatibility Note
+This code is specifically tuned for the **AR4_Embodied_Controller**.
+Please ensure you have the matching hardware driver running before starting the inference script.
+
+### 👉 [Get the Hardware Driver Here](https://github.com/robotsir/AR4_Embodied_Controller)
+
+---
+# Original UMI Documentation
+*(The text below is from the original repository by Chi et al.)*
+
 # Universal Manipulation Interface
 
 [[Project page]](https://umi-gripper.github.io/)
