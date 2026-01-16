@@ -1,6 +1,6 @@
 # 🧠 UMI on a Budget: Low-Cost Adaptation for AR4
 
-[![Watch the Demo](https://img.youtube.com/vi/qmbZjXXNZu8/hqdefault.jpg)](https://youtu.be/qmbZjXXNZu8)
+[![Watch the Demo](assets/UMI_AR4.gif)](https://youtu.be/DaHaX00mwM8)
 
 ## ⚡ Project Overview
 This repository is a specialized fork of the [Universal Manipulation Interface (UMI)](https://github.com/real-stanford/universal_manipulation_interface). 
