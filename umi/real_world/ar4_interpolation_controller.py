@@ -7,108 +7,26 @@ import numpy as np
 import scipy.spatial.transform as st
 import serial
 import re
-import ikpy.chain # for FK/IK
 
+# --- UMI / Diffusion Policy Imports ---
 from umi.shared_memory.shared_memory_queue import SharedMemoryQueue, Empty
 from umi.shared_memory.shared_memory_ring_buffer import SharedMemoryRingBuffer
 from umi.common.pose_trajectory_interpolator import PoseTrajectoryInterpolator
 from diffusion_policy.common.precise_sleep import precise_wait
 
+# --- KINEMATICS IMPORT ---
+# This expects 'ar4_kinematics.py' to be in the same folder
+try:
+    from umi.real_world.ar4_kinematics import AR4Kinematics
+except ImportError:
+    print("[ERROR] Could not import 'AR4Kinematics'. Make sure 'ar4_kinematics.py' is in the same folder.")
+    raise
+
+# --- UTILS FOR SERIAL PARSING ---
 _RP_RE = re.compile(r"([A-Z])(-?\d+(?:\.\d+)?)")
 
-# --- 1. The IK Solver Class (Added) ---
-class AR4Kinematics:
-    def __init__(self, urdf_path="../../AR4/description/urdf/ar4_no_gripper.urdf"):
-        # Set numpy options for clean math
-        np.set_printoptions(suppress=True, precision=6)
-        
-        # Define chain mask (Base=False, 6 Joints=True, Flange=False)
-        # Ensure your chain actually has 8 links. If using standard URDF, it might be 10.
-        # This mask assumes 'ar4_no_gripper.urdf' (8 links)
-        mask = [False, True, True, True, True, True, True, False]
-        
-        self.chain = ikpy.chain.Chain.from_urdf_file(
-            urdf_path,
-            base_elements=["base_link"],
-            name="ar4",
-            active_links_mask=mask
-        )
-        
-        # STATE: Remember previous joints for the "Speed Hack"
-        self.current_joints_rad = [0] * len(self.chain.links)
-
-        # Coordinate Frame Correction (UMI World -> AR4 Base)
-        # Rotate -90 degrees around Z because AR4 X is "Right" and UMI X is "Forward"
-        #self.world_to_base = st.Rotation.from_euler('z', -90, degrees=True).as_matrix()
-        # TRANSFORM: AR4 Base -> UMI World (Inverse of above)
-        #        self.base_to_world = self.world_to_base.T
-    def compute_joint_angles(self, target_pose_6d):
-        """
-        Input: target_pose_6d (numpy array [x,y,z, rx,ry,rz] in METERS and RADIANS (vector))
-        Output: List of 6 joint angles in DEGREES for the motors.
-        """
-        # 1. Extract Position and Orientation from 6D vector
-        """ IK: UMI World Pose -> Joint Angles (Deg) """
-        pos_m = target_pose_6d[:3]
-        rot_vec = target_pose_6d[3:]
-        rot_mat = st.Rotation.from_rotvec(rot_vec).as_matrix()
-
-        # 2. Apply Coordinate Frame Correction (World -> Robot Base)
-        # We rotate the target so "Forward" in World becomes "Forward" in Robot Base
-        # pos_robot = self.world_to_base @ pos_m
-        # rot_robot = self.world_to_base @ rot_mat
-        # no transfo for now
-        pos_robot = pos_m
-        rot_robot = rot_mat
-
-        # 3. Solve IK (using previous joints as seed)
-        # Note: IKPy expects a 4x4 matrix or pos+orient separately
-        calculated_joints = self.chain.inverse_kinematics(
-            target_position=pos_robot,
-            target_orientation=rot_robot,
-            orientation_mode="all",
-            optimizer="least_squares", 
-            initial_position=self.current_joints_rad 
-        )
-        
-        # 4. Update State
-        self.current_joints_rad = calculated_joints
-
-        # 5. Convert to Degrees for Teensy
-        joints_deg = np.degrees(calculated_joints)
-        
-        # Extract indices 1-6 (The motors)
-        return joints_deg[1:7]
-    
-    def compute_fk(self, joints_deg):
-        """ FK: Joint Angles (Deg) -> UMI World Pose (6D Vector) """
-        # 1. Prepare joints: Deg -> Rad, and Add Padding for Base/Flange
-        # [Base=0, J1..J6, Flange=0]
-        joints_rad = np.radians(joints_deg)
-        padded_joints = [0] + list(joints_rad) + [0]
-
-        # 2. Run Forward Kinematics
-        fk_matrix = self.chain.forward_kinematics(padded_joints)
-
-        # 3. Extract components in AR4 Base Frame
-        pos_ar4 = fk_matrix[:3, 3]
-        rot_ar4 = fk_matrix[:3, :3]
-
-        # 4. Convert Base -> World
-        # P_world = R_base_to_world * P_ar4
-        pos_world = pos_ar4
-        # R_world = R_base_to_world * R_ar4
-        rot_world_mat = rot_ar4
-
-        # 5. Format as 6D Vector (XYZ + RotVec) for UMI
-        rot_world_vec = st.Rotation.from_matrix(rot_world_mat).as_rotvec()
-        return np.concatenate([pos_world, rot_world_vec])
-    
 def parse_rp_line(line: str) -> dict:
-    """
-    Parses: A...B...C... ... G...H...I... J...K...L...
-    Returns dict: {'A':..., 'B':..., ..., 'L':...}
-    """
+    """ Parses the AR4 'RP' response string into a dictionary. """
     d = {}
     for k, v in _RP_RE.findall(line):
         d[k] = float(v)
@@ -177,43 +95,48 @@ class AR4InterpolationController(mp.Process):
 
     def run(self):
         # Initialize Serial INSIDE the process
-        ser = serial.Serial(self.port, 115200, timeout=1.0)
-        time.sleep(0.5) # Wait for Teensy reset
-        # clear error state just in case
-        ser.write(b"ER\n")
-        line = ser.readline().decode("ascii", errors="ignore")
+        try:
+            np.set_printoptions(suppress=True, precision=6)
 
-        print(f"[AR4Controller] ER Response: {line.strip()}")
+            ser = serial.Serial(self.port, 115200, timeout=1.0)
+            time.sleep(0.5) # Wait for Teensy reset
+            # clear error state just in case
+            ser.write(b"ER\n")
+            line = ser.readline().decode("ascii", errors="ignore")
+
+            print(f"[AR4Controller] ER Response: {line.strip()}")
 
 
-        # Move to initial position (optional)
-        # ser.write(b"MJX0Y0Z0Rz0Ry0Rx0Sp10\n")
-        # line = ser.readline().decode("ascii", errors="ignore")
-        cmd = "RJA0.000B-20.016C30.024D0.000E90.000F0.000J70J80J90Sp25Ac15Dc20Rm100WNLm000000\n"
+            # Move to initial position (optional)
+            # ser.write(b"MJX0Y0Z0Rz0Ry0Rx0Sp10\n")
+            # line = ser.readline().decode("ascii", errors="ignore")
+            cmd = "RJA0.000B-20.016C30.024D0.000E90.000F0.000J70J80J90Sp25Ac15Dc20Rm100WNLm000000\n"
 
-        ser.reset_input_buffer()
-        ser.write(cmd.encode())    
-        deadline = time.time() + 30.0
-        required_joints = ["B", "C", "D", "E", "F"]
-        
-        while time.time() < deadline:
-          response = ser.readline().decode("utf-8").strip()
-          if not response:
-            continue
-          if response.startswith('E'):
-            break
-          if response.startswith("A") and all(char in response for char in required_joints):
-            break
+            ser.reset_input_buffer()
+            ser.write(cmd.encode())    
+            deadline = time.time() + 30.0
+            required_joints = ["B", "C", "D", "E", "F"]
+            
+            while time.time() < deadline:
+                response = ser.readline().decode("utf-8").strip()
+                if not response:
+                    continue
+                if response.startswith('E'):
+                    break
+                if response.startswith("A") and all(char in response for char in required_joints):
+                    break
 
+        except Exception as e:
+            print(f"[AR4Controller] Serial Error: {e}")
+            self.ready_event.set() # Release wait to fail gracefully
+            return
 
         # 2. Initialize Kinematics Solver INSIDE the process
         # (ikpy is not picklable, so it must be created here, not in __init__)
         kinematics = AR4Kinematics()
 
         try:
-
-            # _RP_RE = re.compile(r"G([\d.-]+)H([\d.-]+)I([\d.-]+)J([\d.-]+)K([\d.-]+)L([\d.-]+)")
-
+            # --- HELPER: Serial I/O Wrapper ---
             def get_current_pose_and_joints():
                 # [NEW] Sweep the floor: Clear the buffer of old responses (like "OK")
                 # from the PREVIOUS loop iteration before asking for new data.
@@ -255,13 +178,6 @@ class AR4InterpolationController(mp.Process):
                     # 2. Compute FK to get Cartesian Pose (In UMI Frame)
                     # This returns the 6D pose vector [x, y, z, rx, ry, rz]
                     pose_umi = kinematics.compute_fk(joints_deg)
-
-                    # Update the Solver's internal state to match reality
-                    # This ensures the first IK calculation starts from the REAL position
-                    # We need to pad it to match the chain length (usually 8: [Base, J1..J6, Flange])
-                    full_chain_rads = [0] + list(joints_rad) + [0]
-                    kinematics.current_joints_rad = full_chain_rads
-                    
 
 
                     return pose_umi, joints_rad
