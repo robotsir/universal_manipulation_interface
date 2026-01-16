@@ -9,20 +9,20 @@ This repository is a specialized fork of the [Universal Manipulation Interface (
 
 ## 🛠️ Key Engineering Adaptations
 
-### 1. Hardware Abstraction Layer (HAL) Rewrite
+### 1. Hardware Abstraction Layer
 * **Original:** Supported Universal Robots (UR5), Franka Emika, and WSG industrial grippers.
-* **My Implementation:** Wrote custom drivers to interface with the **AR4 6-DOF Robotic Arm**.
-* **Communication:** Implemented a robust **Serial Communication** bridge to stream end-effector poses from the inference loop directly to the AR4 microcontroller/Python driver.
+* **My Implementation:** Wrote custom drivers to interface with **AR4 6-DOF Robotic Arm** and **Custom Servo Gripper**.
+* **Communication:** Implemented a robust **Serial Communication** bridge to stream end-effector poses from the inference loop to the AR4 microcontroller through Python kinematics solver.
 
 ### 2. Vision System Retrofit
 * **Original:** Relied on GoPro, lens mod and capture card to feed video in real time.
-* **My Implementation:** Adapted the perception pipeline to utilize standard **$50 USB Webcams**.
+* **My Implementation:** Adapted the perception pipeline to utilize standard **$50 USB Camera**.
 
 ### 3. Custom End-Effector (CAD & Control)
 * **Original:** Industrial parallel-jaw grippers with position feedback.
-* **Mechanical Design:** Designed and 3D-printed a custom gripper actuated by a standard hobby servo.
+* **My Implementation:** Designed and 3D-printed a custom gripper actuated by a standard hobby servo.
 * **Hardware Interface:** Utilized an **Arduino Mega 2560** (Auxiliary Controller) to handle the servo signal.
-* **Control Logic:** Implemented a mapping function to convert the policy's target `gripper_width` into a **PWM signal** for the servo. 
+* **Control Logic:** Implemented a mapping function to convert the policy's target `gripper_width` into a **PWM signal** to control the servo position.
 
 ## ⚠️ Compatibility Note
 This code is specifically tuned for the **AR4_Embodied_Controller**.
