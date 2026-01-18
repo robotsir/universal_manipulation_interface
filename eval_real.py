@@ -31,7 +31,6 @@ import threading
 import av
 import click
 import cv2
-from sklearn import pipeline
 import yaml
 import dill
 import hydra
@@ -228,9 +227,8 @@ def main(input, output, robot_config,
             if not ok:
                 continue
 
-            frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-            resized = cv2.resize(frame_rgb, (224, 224), interpolation=cv2.INTER_AREA)
-            cv2.imshow("camera_only", resized[..., ::-1])
+            resized = cv2.resize(frame_bgr, (224*3, 224*3), interpolation=cv2.INTER_AREA)
+            cv2.imshow("camera_only", resized)
             if (cv2.waitKey(1) & 0xFF) == ord('q'):
                 break
 
@@ -569,11 +567,6 @@ def main(input, output, robot_config,
                     stop_episode = False
 
 
-                    #test gripper with random width
-                    _rng = np.random.default_rng(0)  # deterministic
-                    _last_grip_update_t = time.time()
-                    _test_grip_m = 0.08
-
                     while True:
                         # calculate timing
                         t_cycle_end = t_start + (iter_idx + steps_per_inference) * dt
@@ -601,18 +594,6 @@ def main(input, output, robot_config,
                         
 
 
-
-
-                            # ---- ADD THIS BLOCK RIGHT HERE ----
-                            # action shape: (T, n_robots*7) where each robot is [x y z rx ry rz gripper]
-                            a0 = action[0]  # first step that would execute next (before timing filters)
-
-                            for robot_idx in range(len(robots_config)):
-                                base = robot_idx * 7
-                                pose6 = a0[base:base+6]
-                                grip  = a0[base+6]
-                                # print(f"[policy->env] robot{robot_idx} pose xyz={pose6[:3]} rotvec={pose6[3:6]} gripper_width={grip}")
-                            # ---- END ADD ----
 
                             print('Inference latency:', time.time() - s)
 
@@ -661,19 +642,7 @@ def main(input, output, robot_config,
                             action_timestamps = action_timestamps[is_new]
 
 
-                        # # --- TEST: override gripper command ---
-                        # now = time.time()
-                        # if now - _last_grip_update_t > 3.0:   # change once per 3 seconds
-                        #     _test_grip_m = float(_rng.uniform(0.0, 0.11))
-                        #     _last_grip_update_t = now
-                        #     print(f"[TEST] overriding g_actions -> {_test_grip_m:.3f} m")
-
-                        #     #g_actions = _test_grip_m
-                        
-                        # this_target_poses[:, 6::7] = _test_grip_m  # override all gripper commands
-                        # # --- end TEST ---
-
-
+                        # print out the current action for debugging
                         a_exec = this_target_poses[0]
                         for robot_idx in range(len(robots_config)):
                             base = robot_idx * 7
@@ -713,6 +682,7 @@ def main(input, output, robot_config,
                             color=(255,255,255)
                         )
 
+                        # make the window bigger
                         cv2.namedWindow('Running Policy', cv2.WINDOW_NORMAL)
                         cv2.resizeWindow('Running Policy', 1000, 1000)
 

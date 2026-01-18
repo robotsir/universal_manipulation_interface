@@ -11,7 +11,6 @@ from umi.real_world.servo_gripper_controller import ServoGripperController
 #from umi.real_world.franka_interpolation_controller import FrankaInterpolationController
 FrankaInterpolationController = None
 RTDEInterpolationController = None
-# use dummy controller for testing
 from umi.real_world.ar4_interpolation_controller import AR4InterpolationController
 
 from umi.real_world.multi_uvc_camera import MultiUvcCamera, VideoRecorder

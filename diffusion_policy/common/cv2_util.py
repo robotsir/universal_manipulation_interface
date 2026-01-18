@@ -120,12 +120,7 @@ def get_image_transform(
         return img
     return transform
 
-
-# import cv2
-# import math
-# import numpy as np
-# from typing import Tuple
-
+# Pad image instead of cropping. This works better for my camera, to match the GoPro image better
 def get_image_transform_letterbox(
         input_res: Tuple[int, int] = (3840, 3040),
         output_res: Tuple[int, int] = (224, 224),
@@ -176,10 +171,6 @@ def get_image_transform_letterbox(
         return img
 
     return transform
-
-
-
-
 
 
 def optimal_row_cols(
