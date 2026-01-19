@@ -16,18 +16,18 @@ class Command(enum.Enum):
 
 class GripperCorrector:
     def __init__(self):
-        # 1. Define the raw data points you measured
-        # "Command" = What you sent to the gripper
+        # 1. Define the raw data points we measured
+        # "Command" = What we sent to the gripper
         # "Actual"  = What the caliper measured (in mm)
         self.map_command = np.array([0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110])
         # self.map_actual  = np.array([5, 10, 20, 25, 35, 45, 55, 66, 79, 90, 100, 110])
         # tightened the gripper a bit more for better gripping force
-        self.map_actual  =   np.array([10, 13, 23, 33, 43, 53, 63, 70, 80, 90, 100, 110])
+        self.map_actual = np.array([10, 13, 23, 33, 43, 53, 63, 70, 80, 90, 100, 110])
 
     def get_corrected_command(self, desired_opening_mm):
         """
-        Input: The opening you WANT (e.g., 30mm)
-        Output: The command you must SEND (e.g., 35.0)
+        Input: The opening we WANT (e.g., 30mm)
+        Output: The command we must SEND (e.g., 35.0)
         """
         # np.interp(x, xp, fp)
         # x  = The value we want to find (Desired Opening)
@@ -170,86 +170,94 @@ class ServoGripperController(mp.Process): # Inherit from mp.Process
     # ========= main loop in process ============
     def run(self):
         try:
-            # Open serial INSIDE the process
-            ser = serial.Serial(self.port, 115200, timeout=1.0)
-            time.sleep(2.0) # Wait for reboot
-            
-            # Initialize interpolator to prevent sudden jumps
-            curr_t = time.monotonic()
-            last_waypoint_time = curr_t # [NEW] Track this like WSG
-            pose_interp = PoseTrajectoryInterpolator(
-                times=[curr_t], 
-                poses=[[self.init_width,0,0,0,0,0]]
-            )
-            
-            keep_running = True
-            t_start = time.monotonic() # [NEW] For absolute timing
-            iter_idx = 0
-            dt = 1.0 / self.frequency
-
-            corrector = GripperCorrector()
-
-
-            while keep_running:
-                t_now = time.monotonic()
+            # Open serial connection using 'with'
+            # This guarantees ser.close() runs automatically when we exit the block
+            with serial.Serial(self.port, 115200, timeout=1.0) as ser:
+                time.sleep(2.0) # Wait for reboot
                 
-                # [NEW] Lookahead: Ask for the position in the FUTURE (t_now + lookahead)
-                # This compensates for the lack of velocity feed-forward
-                target_width = pose_interp(t_now + self.lookahead_time)[0]
+                # Initialize interpolator to prevent sudden jumps
+                curr_t = time.monotonic()
+                last_waypoint_time = curr_t # Track this like WSG
+                pose_interp = PoseTrajectoryInterpolator(
+                    times=[curr_t], 
+                    poses=[[self.init_width,0,0,0,0,0]]
+                )
                 
-                # B. Send to Arduino (Meters -> MM)
-                # To do: need to fine tune the gripper opening width, as it's not accurate
+                keep_running = True
+                t_start = time.monotonic() # For absolute timing
+                iter_idx = 0
+                dt = 1.0 / self.frequency
 
-                target_width_mm = int(round(np.clip(target_width * 1000.0, 0, 110)))
-                gripper_cmd = corrector.get_corrected_command(target_width_mm)
-                ser.write(f"SV0P{gripper_cmd}\n".encode("ascii"))
-
-                # C. Feedback to Ring Buffer
-                self.ring_buffer.put({
-                    'gripper_position': target_width, 
-                    # [NEW] Subtract latency so policy knows this data is slightly old
-                    'gripper_timestamp': time.time() - self.receive_latency 
-                })
-
-                # D. Handle Command Queue
-                try:
-                    commands = self.input_queue.get_all()
-                    n_cmd = len(commands['cmd'])
-                except Empty:
-                    n_cmd = 0
-                    commands = None # Safety
-
-                # Only try to loop if we actually have commands
-                if n_cmd > 0:
-                    # execute commands
-                    for i in range(n_cmd):
-                        if commands['cmd'][i] == Command.SHUTDOWN.value:
-                            keep_running = False
-                        elif commands['cmd'][i] == Command.SCHEDULE_WAYPOINT.value:
-                            # Convert wall time to monotonic for the interpolator
-                            target_t_mono = time.monotonic() - time.time() + commands['target_time'][i]
-
-                            # [NEW] Pass last_waypoint_time to smooth transitions
-                            pose_interp = pose_interp.schedule_waypoint(
-                                pose=[commands['target_width'][i],0,0,0,0,0],
-                                time=target_t_mono,
-                                max_pos_speed=0.2, 
-                                curr_time=t_now,
-                                last_waypoint_time=last_waypoint_time
-                            )
-                            last_waypoint_time = target_t_mono # [NEW] Update tracker
+                corrector = GripperCorrector()
 
 
-                if iter_idx == 0: 
-                    self.ready_event.set()
-                iter_idx += 1
+                while keep_running:
+                    t_now = time.monotonic()
+                    
+                    # Lookahead: Ask for the position in the FUTURE (t_now + lookahead)
+                    # This compensates for the lack of velocity feed-forward
+                    target_width = pose_interp(t_now + self.lookahead_time)[0]
+                    
+                    # Send to Arduino (Meters -> MM)
+                    # To do: need to fine tune the gripper opening width, as it's not accurate
 
-                # don't use below, as t_now may drift
-                # precise_wait(t_now + dt)
-                t_end = t_start + dt * iter_idx
-                precise_wait(t_end=t_end, time_func=time.monotonic)
+                    target_width_mm = int(round(np.clip(target_width * 1000.0, 0, 110)))
+                    gripper_cmd = corrector.get_corrected_command(target_width_mm)
+                    ser.write(f"SV0P{gripper_cmd}\n".encode("ascii"))
+
+                    # Feedback to Ring Buffer
+                    self.ring_buffer.put({
+                        'gripper_position': target_width, 
+                        # Subtract latency so policy knows this data is slightly old
+                        'gripper_timestamp': time.time() - self.receive_latency 
+                    })
+
+                    # Handle Command Queue
+                    try:
+                        commands = self.input_queue.get_all()
+                        n_cmd = len(commands['cmd'])
+                    except Empty:
+                        n_cmd = 0
+                        commands = None # Safety
+
+                    # Only try to loop if we actually have commands
+                    if n_cmd > 0:
+                        # execute commands
+                        for i in range(n_cmd):
+                            if commands['cmd'][i] == Command.SHUTDOWN.value:
+                                keep_running = False
+                            elif commands['cmd'][i] == Command.SCHEDULE_WAYPOINT.value:
+                                # Convert wall time to monotonic for the interpolator
+                                target_t_mono = time.monotonic() - time.time() + commands['target_time'][i]
+
+                                # Pass last_waypoint_time to smooth transitions
+                                pose_interp = pose_interp.schedule_waypoint(
+                                    pose=[commands['target_width'][i],0,0,0,0,0],
+                                    time=target_t_mono,
+                                    max_pos_speed=0.2, 
+                                    curr_time=t_now,
+                                    last_waypoint_time=last_waypoint_time
+                                )
+                                last_waypoint_time = target_t_mono # Update tracker
+
+
+                    if iter_idx == 0: 
+                        self.ready_event.set()
+                    iter_idx += 1
+
+                    # don't use below, as t_now may drift
+                    # precise_wait(t_now + dt)
+                    t_end = t_start + dt * iter_idx
+                    precise_wait(t_end=t_end, time_func=time.monotonic)
+
+        except Exception as e:
+            # This runs if the Serial port fails OR if the code inside the loop crashes.
+            print(f"[ServoGripper] CRITICAL ERROR: {e}")
+                
         finally:
-            ser.close()
+            # Post-cleanup logic
+            # The serial port is already closed here
+            # Perform the remaining cleanup tasks
             self.ready_event.set()
             if self.verbose:
                 print(f"[ServoGripper] Disconnected from mega2560")

@@ -1,7 +1,6 @@
 import numpy as np
 import math
 from scipy.spatial.transform import Rotation as R
-# from typing import Tuple, Optional, List
 
 class AR4Kinematics:
     def __init__(self):
@@ -38,7 +37,7 @@ class AR4Kinematics:
         
     def _apply_custom_transforms(self):
         """
-        Applies the specific base/tool logic you provided.
+        Applies the specific base/tool logic for the AR4 robot.
         """
         # 1. Base Correction (Z -90)
         # Rotate the 'base' to align with the 'world'
@@ -75,7 +74,7 @@ class AR4Kinematics:
     def _modified_dh_transform(self, theta_rad, idx):
         """
         Calculates the Modified DH Transformation Matrix (Craig Eq 3.6).
-        Matches the logic of your original 'transJ' function.
+        Matches the logic of the original 'transJ' function.
         """
         alpha_deg, a, d, offset_deg = self.DH_PARAMS[idx]
         
@@ -106,7 +105,7 @@ class AR4Kinematics:
         Input: joints [J1...J6] in degrees.
         Output: (x, y, z, roll, pitch, yaw)
         """
-        # 1. Handle J1 Direction (Your code uses -J1)
+        # 1. Handle J1 Direction (my original code uses -J1)
         j1_corrected = -joints[0]
         
         # Create list of radians, applying the J1 fix
@@ -125,7 +124,7 @@ class AR4Kinematics:
         # 3. Extract Position
         x, y, z = T_world_tool[:3, 3]
 
-        # 4. Extract Rotation (Matches your Fanuc/Motoman logic)
+        # 4. Extract Rotation (Matches the Fanuc/Motoman logic)
         # Using scipy 'xyz' (extrinsic) matches the RPY logic in most cases
         r = R.from_matrix(T_world_tool[:3, :3])
         rx, ry, rz = r.as_euler('xyz', degrees=True)
@@ -310,7 +309,7 @@ class AR4Kinematics:
         target_mat[:3, 3] = pos_m
 
         # 2. Call Analytical Solver
-        # Note: wrist_flip=False is standard. Change if you need "Elbow Down".
+        # Note: wrist_flip=False is standard. Change if we need "Elbow Down".
         joints = self.inverse_kinematics(target_mat, wrist_flip=False)
 
         if joints is None:
